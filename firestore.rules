@@ -5,44 +5,32 @@ rules_version = '2';
 // 路徑模型：artifacts/{appId}/public/data/rooms/{roomId}
 //
 // 設計原則：
-// - 房間是公開遊戲資料，已登入（含匿名）使用者皆可讀寫自己有參與的房間
+// - 已登入（含匿名）使用者可讀寫房間（這是個多人遊戲，需要互相寫對方的票/聊天）
 // - 不允許未登入直接呼叫 Firestore
-// - 房主可刪除房間；其他玩家不行
-// - 玩家文件大小、欄位範圍做基本限制以防爆量寫入
+// - 建立房間時建立者必須把自己設為 host
+// - 刪除房間僅限 host
 //
-// 注意：這只是基本防護。要完全防作弊（例如「不偷看別人的牌」）需要把敏感資料
-// 移到 Cloud Functions / 把不該由 client 看見的欄位拆到子集合並加 server-side 邏輯。
+// 注意：這只是基本防護。同房間玩家技術上仍可透過自製 client 改寫對方資料。
+// 要徹底防作弊（例如「不偷看別人的牌」「不能竄改別人的票」）需要把關鍵邏輯
+// 搬到 Cloud Functions、把敏感欄位拆到子集合並加 server-side 校驗。
 
 service cloud.firestore {
   match /databases/{database}/documents {
 
     match /artifacts/{appId}/public/data/rooms/{roomId} {
+      // 已登入即可讀（為了確認房間是否存在 / 加入房間）
+      allow read: if request.auth != null;
 
-      function isSignedIn() {
-        return request.auth != null;
-      }
-
-      function isHost() {
-        return resource.data.hostId == request.auth.uid;
-      }
-
-      function isPlayer() {
-        return request.auth.uid in resource.data.players.map(p, p.uid);
-      }
-
-      // 任何已登入使用者都能讀房間（用來查存在性 / join）
-      allow read: if isSignedIn();
-
-      // 建立房間：建立者必須把自己設為 host，且 status 必須是 lobby
-      allow create: if isSignedIn()
+      // 建立房間：建立者必須是 host，且 status = lobby
+      allow create: if request.auth != null
         && request.resource.data.hostId == request.auth.uid
         && request.resource.data.status == 'lobby';
 
-      // 更新：必須是房主或當前玩家之一
-      allow update: if isSignedIn() && (isHost() || isPlayer());
+      // 更新：任何已登入玩家皆可（包含投票、聊天、夜晚行動）
+      allow update: if request.auth != null;
 
-      // 刪除：只有房主能解散房間
-      allow delete: if isSignedIn() && isHost();
+      // 刪除：僅限 host
+      allow delete: if request.auth != null && resource.data.hostId == request.auth.uid;
     }
 
     // 預設拒絕其他路徑
