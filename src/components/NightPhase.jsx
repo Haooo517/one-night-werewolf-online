@@ -10,33 +10,23 @@ import NightActionScreen from './NightActionScreen.jsx';
 function isMyTurnAt({ myOriginalRole, currentActiveRoleId, doppelgangerRole }) {
   if (!myOriginalRole || !currentActiveRoleId) return false;
 
-  // 狼人時段：所有狼陣營（含化身-狼陣營）一起睜眼相認
-  if (currentActiveRoleId === 'werewolf') {
-    if (isWolfRoleId(myOriginalRole.id)) return true;
-    if (myOriginalRole.id === 'doppelganger' && isWolfRoleId(doppelgangerRole)) return true;
+  // 化身：只在自己的 slot（化身完後直接行動）以及化身-失眠者/化身-告密者的獨立 slot 醒來。
+  // 其他角色的 slot 一律不醒，避免重複行動。
+  if (myOriginalRole.id === 'doppelganger') {
+    if (currentActiveRoleId === 'doppelganger') return true;
+    if (currentActiveRoleId === 'doppel_insomniac') return doppelgangerRole === 'insomniac';
+    if (currentActiveRoleId === 'doppel_revealer') return doppelgangerRole === 'revealer';
     return false;
   }
 
-  // 化身選人時段：只有化身幽靈本人
-  if (currentActiveRoleId === 'doppelganger') {
-    return myOriginalRole.id === 'doppelganger';
+  // 狼人時段：所有狼陣營一起睜眼相認（基本狼人 / 狼老大 / 狼先知 / 睡狼）
+  if (currentActiveRoleId === 'werewolf') {
+    return isWolfRoleId(myOriginalRole.id);
   }
 
-  // 化身-失眠者 / 化身-告密者 的虛擬 slot
-  if (currentActiveRoleId === 'doppel_insomniac') {
-    return myOriginalRole.id === 'doppelganger' && doppelgangerRole === 'insomniac';
-  }
-  if (currentActiveRoleId === 'doppel_revealer') {
-    return myOriginalRole.id === 'doppelganger' && doppelgangerRole === 'revealer';
-  }
-
-  // 化身為其他角色：在那個角色的時段醒來（失眠者 / 告密者除外，已用上面的虛擬 slot）
-  if (
-    myOriginalRole.id === 'doppelganger' &&
-    doppelgangerRole === currentActiveRoleId &&
-    !['insomniac', 'revealer'].includes(doppelgangerRole)
-  ) {
-    return true;
+  // 化身專屬虛擬 slot：非化身一律 false
+  if (currentActiveRoleId === 'doppel_insomniac' || currentActiveRoleId === 'doppel_revealer') {
+    return false;
   }
 
   // 一般情況：原始角色 === 現在時段

@@ -14,30 +14,18 @@ import {
 } from 'lucide-react';
 import { runTransaction } from 'firebase/firestore';
 
-import {
-  ALL_ROLES,
-  findRole,
-  isWolfRoleId,
-  getNightOrderPriority,
-  VIRTUAL_NIGHT_SLOTS,
-} from '../constants.js';
+import { ALL_ROLES, findRole, isWolfRoleId } from '../constants.js';
 import { db, roomDoc } from '../firebase.js';
 
 function computeRoleForSlot({ currentActiveRoleId, myOriginalRole, doppelgangerRole }) {
   if (!myOriginalRole) return null;
+  // 虛擬 slot：化身-失眠者 / 化身-告密者
   if (currentActiveRoleId === 'doppel_insomniac') return findRole('insomniac');
   if (currentActiveRoleId === 'doppel_revealer') return findRole('revealer');
-  if (currentActiveRoleId === 'werewolf') {
-    if (myOriginalRole.id === 'doppelganger' && doppelgangerRole) {
-      return findRole(doppelgangerRole) ?? myOriginalRole;
-    }
-    return myOriginalRole;
-  }
-  if (
-    myOriginalRole.id === 'doppelganger' &&
-    doppelgangerRole === currentActiveRoleId &&
-    !['insomniac', 'revealer'].includes(doppelgangerRole)
-  ) {
+  // 化身自己的 slot：選完後直接以複製到的角色行動（失眠/告密除外，會在虛擬 slot 行動）
+  if (currentActiveRoleId === 'doppelganger' && myOriginalRole.id === 'doppelganger') {
+    if (!doppelgangerRole) return findRole('doppelganger');
+    if (['insomniac', 'revealer'].includes(doppelgangerRole)) return findRole('doppelganger');
     return findRole(doppelgangerRole) ?? myOriginalRole;
   }
   return myOriginalRole;
@@ -163,6 +151,9 @@ export default function NightActionScreen({
     : -1;
 
   // ----- 提交：化身選人 -----
+  // 化身選完直接在同一個 slot 行動（失眠者 / 告密者除外，要等獨立 slot）。
+  // doppel_insomniac / doppel_revealer 的 slot 在 buildInitialDeck 就已經放進 nightOrder，
+  // 所以這裡只需要寫 doppelgangerRole 跟 log。
   const submitDoppelgangerView = async () => {
     if (submitting) return;
     setSubmitting(true);
@@ -180,36 +171,18 @@ export default function NightActionScreen({
         if (sentinelCardId != null && targetCard.id === sentinelCardId) {
           throw new Error('該玩家被守衛保護，無法選為化身對象');
         }
-        const copiedRoleId = targetCard.role.id;
-        const copiedRole = findRole(copiedRoleId);
         displayName = targetCard.role.name;
 
         const myName = data.players.find((p) => p.uid === myUid)?.name;
         const viewLog = `${myName} (化身幽靈) 查看了 ${targetCard.ownerName}，化身為：【${targetCard.role.name}】`;
 
-        // 化身-失眠者 / 化身-告密者：插入虛擬 slot 至 nightOrder
-        let slotToAdd = copiedRoleId;
-        if (copiedRoleId === 'insomniac') slotToAdd = 'doppel_insomniac';
-        else if (copiedRoleId === 'revealer') slotToAdd = 'doppel_revealer';
-
-        const updates = {
-          doppelgangerRole: copiedRoleId,
+        txn.update(ref, {
+          doppelgangerRole: targetCard.role.id,
           logs: [...(data.logs || []), viewLog],
-        };
-
-        const needsSlot =
-          copiedRole &&
-          (copiedRole.wakesAtNight || VIRTUAL_NIGHT_SLOTS[slotToAdd]) &&
-          !data.nightOrder.includes(slotToAdd);
-        if (needsSlot) {
-          updates.nightOrder = [...data.nightOrder, slotToAdd].sort(
-            (a, b) => getNightOrderPriority(a) - getNightOrderPriority(b),
-          );
-        }
-        txn.update(ref, updates);
+        });
       });
+      // 清掉先前選的 idx，讓下一個 UI（複製角色的行動 UI）從乾淨狀態開始
       setSelection([]);
-      if (displayName) setLocalViewed(`你現在是：【${displayName}】，等待行動時段...`);
     } catch (e) {
       console.error('Doppelganger pick failed:', e);
       showToast?.(e?.message || '行動失敗，請再試一次');
@@ -506,7 +479,7 @@ export default function NightActionScreen({
   // ============ 各種角色 UI ============
 
   // 化身-選人時段
-  if (currentActiveRoleId === 'doppelganger') {
+  if (currentActiveRoleId === 'doppelganger' && myOriginalRole?.id === 'doppelganger') {
     if (!gameState.doppelgangerRole) {
       return (
         <div className="w-full bg-indigo-900/20 border border-indigo-500/50 p-5 sm:p-8 rounded-2xl sm:rounded-[3rem] animate-in zoom-in-95">
@@ -528,20 +501,34 @@ export default function NightActionScreen({
         </div>
       );
     }
-    // 已化身完，等待複製到的角色行動時段
-    const copied = findRole(gameState.doppelgangerRole);
-    return (
-      <div className="w-full bg-indigo-900/20 border border-indigo-500/50 p-6 sm:p-10 rounded-2xl sm:rounded-[3rem] text-center animate-in zoom-in-95">
-        <Eye size={40} className="text-indigo-400 mx-auto mb-3" />
-        <h3 className="text-xl sm:text-2xl font-black text-indigo-400 mb-4">已化身完成</h3>
-        <div className="bg-slate-900/50 p-4 sm:p-6 rounded-2xl border border-indigo-500/20 mb-4">
-          <p className="text-slate-500 text-sm mb-1">你現在是</p>
-          <div className="text-white text-2xl sm:text-3xl font-black">【{copied?.name}】</div>
+    // 化身已完成。失眠者 / 告密者要等到自己的獨立 slot 才行動，這裡顯示等待。
+    if (['insomniac', 'revealer'].includes(gameState.doppelgangerRole)) {
+      const copied = findRole(gameState.doppelgangerRole);
+      return (
+        <div className="w-full bg-indigo-900/20 border border-indigo-500/50 p-6 sm:p-10 rounded-2xl sm:rounded-[3rem] text-center animate-in zoom-in-95">
+          <Eye size={40} className="text-indigo-400 mx-auto mb-3" />
+          <h3 className="text-xl sm:text-2xl font-black text-indigo-400 mb-4">已化身完成</h3>
+          <div className="bg-slate-900/50 p-4 sm:p-6 rounded-2xl border border-indigo-500/20 mb-4">
+            <p className="text-slate-500 text-sm mb-1">你現在是</p>
+            <div className="text-white text-2xl sm:text-3xl font-black">【{copied?.name}】</div>
+          </div>
+          <p className="text-slate-500 text-xs sm:text-sm leading-relaxed">
+            請等待 【化身-{copied?.name}】 的獨立行動時段
+          </p>
         </div>
-        <p className="text-slate-500 text-xs sm:text-sm leading-relaxed">
-          請等待 【{copied?.name}】 的行動時段才會醒來行動
+      );
+    }
+    // 其它角色：直接接後面的 role-specific UI（role 已經是複製到的角色）
+  }
+
+  // 沒有夜晚行動的角色（化身-村民 / 化身-獵人 / 化身-皮匠 / 化身-保鑣）
+  if (role && role.wakesAtNight === false) {
+    return (
+      <RolePanel color="amber" title={`你現在是【${role.name}】`} icon={CheckCircle2}>
+        <p className="text-center text-slate-400 text-sm leading-relaxed">
+          這個角色沒有夜晚行動，請等待夜晚結束。
         </p>
-      </div>
+      </RolePanel>
     );
   }
 

@@ -1,4 +1,4 @@
-import { ALL_ROLES, findRole, isWolfRoleId } from './constants.js';
+import { ALL_ROLES, findRole, isWolfRoleId, getNightOrderPriority } from './constants.js';
 
 // 結算：算出誰被處死 + 哪一方獲勝
 export function calculateWinner(gameState) {
@@ -221,6 +221,16 @@ export function buildInitialDeck(players, selectedRoles) {
   )
     .sort((a, b) => a.priority - b.priority)
     .map((r) => r.id);
+
+  // 化身-失眠者 / 化身-告密者：只要這局有失眠者 / 告密者，就一定加上這個獨立 slot，
+  // 不管有沒有人是化身。這樣就算沒人扮演也會「跑那 20 秒」做掩護。
+  if (allSelectedRoleIds.includes('insomniac')) {
+    nightOrder.push('doppel_insomniac');
+  }
+  if (allSelectedRoleIds.includes('revealer')) {
+    nightOrder.push('doppel_revealer');
+  }
+  nightOrder.sort((a, b) => getNightOrderPriority(a) - getNightOrderPriority(b));
 
   return { cards, nightOrder };
 }
