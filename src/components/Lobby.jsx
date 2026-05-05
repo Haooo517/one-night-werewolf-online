@@ -11,8 +11,18 @@ const MIN_PLAYERS = 3;
 
 export default function Lobby({ gameState, user, isHost, roomId, showToast }) {
   const [activeTab, setActiveTab] = useState('roles');
+  const [activeRoleGroup, setActiveRoleGroup] = useState('basic');
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState('');
+
+  const basicRoles = ALL_ROLES.filter((r) => r.expansion === 'basic');
+  const daybreakRoles = ALL_ROLES.filter((r) => r.expansion === 'daybreak');
+  const basicSelectedCount = gameState.selectedRoles.filter((id) =>
+    basicRoles.some((r) => r.id === id),
+  ).length;
+  const daybreakSelectedCount = gameState.selectedRoles.filter((id) =>
+    daybreakRoles.some((r) => r.id === id),
+  ).length;
 
   const playerCount = gameState.players.length;
   const requiredCardCount = playerCount + 3;
@@ -244,38 +254,57 @@ export default function Lobby({ gameState, user, isHost, roomId, showToast }) {
                   {gameState.selectedRoles.length} / {requiredCardCount}
                 </div>
               </div>
-              <div className="space-y-4 mb-6 max-h-[460px] overflow-y-auto overflow-x-hidden custom-scrollbar pr-1">
-                <div>
-                  <h4 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] mb-2 px-1">
-                    基本角色
-                  </h4>
-                  <div className="grid grid-cols-1 gap-2">
-                    {ALL_ROLES.filter((r) => r.expansion === 'basic').map((role) => (
-                      <RoleCounter
-                        key={role.id}
-                        role={role}
-                        gameState={gameState}
-                        isHost={isHost}
-                        roomId={roomId}
-                      />
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <h4 className="text-xs font-black text-amber-500/80 uppercase tracking-[0.2em] mb-2 px-1">
-                    破曉擴充 (Daybreak)
-                  </h4>
-                  <div className="grid grid-cols-1 gap-2">
-                    {ALL_ROLES.filter((r) => r.expansion === 'daybreak').map((role) => (
-                      <RoleCounter
-                        key={role.id}
-                        role={role}
-                        gameState={gameState}
-                        isHost={isHost}
-                        roomId={roomId}
-                      />
-                    ))}
-                  </div>
+              <div className="flex gap-2 mb-3 bg-slate-900/40 p-1.5 rounded-xl">
+                <button
+                  onClick={() => setActiveRoleGroup('basic')}
+                  className={`flex-1 py-2 rounded-lg font-black text-sm transition-all flex items-center justify-center gap-2 ${
+                    activeRoleGroup === 'basic'
+                      ? 'bg-blue-600/80 text-white shadow'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  基本角色
+                  <span
+                    className={`text-[11px] px-1.5 py-0.5 rounded-md font-black ${
+                      activeRoleGroup === 'basic'
+                        ? 'bg-white/20 text-white'
+                        : 'bg-slate-800 text-slate-400'
+                    }`}
+                  >
+                    {basicSelectedCount}
+                  </span>
+                </button>
+                <button
+                  onClick={() => setActiveRoleGroup('daybreak')}
+                  className={`flex-1 py-2 rounded-lg font-black text-sm transition-all flex items-center justify-center gap-2 ${
+                    activeRoleGroup === 'daybreak'
+                      ? 'bg-amber-600/80 text-white shadow'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  破曉擴充
+                  <span
+                    className={`text-[11px] px-1.5 py-0.5 rounded-md font-black ${
+                      activeRoleGroup === 'daybreak'
+                        ? 'bg-white/20 text-white'
+                        : 'bg-slate-800 text-slate-400'
+                    }`}
+                  >
+                    {daybreakSelectedCount}
+                  </span>
+                </button>
+              </div>
+              <div className="space-y-3 mb-6 max-h-[460px] overflow-y-auto overflow-x-hidden custom-scrollbar pr-1">
+                <div className="grid grid-cols-1 gap-2">
+                  {(activeRoleGroup === 'basic' ? basicRoles : daybreakRoles).map((role) => (
+                    <RoleCounter
+                      key={role.id}
+                      role={role}
+                      gameState={gameState}
+                      isHost={isHost}
+                      roomId={roomId}
+                    />
+                  ))}
                 </div>
                 {gameState.selectedRoles.includes('alphaWolf') && (
                   <div className="text-[12px] text-amber-400/80 bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 leading-snug">
