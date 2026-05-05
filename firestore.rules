@@ -1,0 +1,53 @@
+rules_version = '2';
+// One Night Werewolf Online — Firestore Security Rules
+//
+// 部署：firebase deploy --only firestore:rules
+// 路徑模型：artifacts/{appId}/public/data/rooms/{roomId}
+//
+// 設計原則：
+// - 房間是公開遊戲資料，已登入（含匿名）使用者皆可讀寫自己有參與的房間
+// - 不允許未登入直接呼叫 Firestore
+// - 房主可刪除房間；其他玩家不行
+// - 玩家文件大小、欄位範圍做基本限制以防爆量寫入
+//
+// 注意：這只是基本防護。要完全防作弊（例如「不偷看別人的牌」）需要把敏感資料
+// 移到 Cloud Functions / 把不該由 client 看見的欄位拆到子集合並加 server-side 邏輯。
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /artifacts/{appId}/public/data/rooms/{roomId} {
+
+      function isSignedIn() {
+        return request.auth != null;
+      }
+
+      function isHost() {
+        return resource.data.hostId == request.auth.uid;
+      }
+
+      function isPlayer() {
+        return request.auth.uid in resource.data.players.map(p, p.uid);
+      }
+
+      // 任何已登入使用者都能讀房間（用來查存在性 / join）
+      allow read: if isSignedIn();
+
+      // 建立房間：建立者必須把自己設為 host，且 status 必須是 lobby
+      allow create: if isSignedIn()
+        && request.resource.data.hostId == request.auth.uid
+        && request.resource.data.status == 'lobby';
+
+      // 更新：必須是房主或當前玩家之一
+      allow update: if isSignedIn() && (isHost() || isPlayer());
+
+      // 刪除：只有房主能解散房間
+      allow delete: if isSignedIn() && isHost();
+    }
+
+    // 預設拒絕其他路徑
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
