@@ -52,9 +52,21 @@ export default function NightActionScreen({
     .map((m) => m.ownerName);
   const myFinalCard = gameState.currentCards.find((c) => c.ownerUid === user.uid);
 
-  // 自動顯示資訊（多狼/爪牙/守夜人/失眠者）— 全部 hooks 都在最前面，避免條件性 hook
+  // 重連後從 server 恢復本回合行動結果（如果有）
+  const myActionForThisRole = gameState.nightActions?.[user?.uid]?.[role?.id];
+
+  // 自動顯示資訊（多狼/爪牙/守夜人/失眠者）+ 重連復原 — hooks 全部在最前面
   useEffect(() => {
     if (!role) return;
+
+    // 1. 已經行動過（重連回到自己的行動結果）— 從 server 恢復
+    if (myActionForThisRole?.viewedInfo) {
+      setLocalViewed(myActionForThisRole.viewedInfo);
+      setHasActed(true);
+      return;
+    }
+
+    // 2. 自動顯示資訊
     if (role.id === 'werewolf' && !isLoneWolf) {
       setLocalViewed(
         teammates.length > 0 ? `狼人同伴：${teammates.join('、 ')}` : '沒有其他狼人',
@@ -73,9 +85,8 @@ export default function NightActionScreen({
       setLocalViewed(`你最終的身分是：【${myFinalCard.role.name}】`);
       setHasActed(true);
     }
-    // 只在 role.id 改變時觸發即可
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [role?.id]);
+  }, [role?.id, myActionForThisRole?.viewedInfo]);
 
   const canSubmit = useMemo(() => {
     if (!role || hasActed || submitting) return false;
@@ -168,6 +179,13 @@ export default function NightActionScreen({
         if (!snap.exists()) throw new Error('房間不存在');
         const data = snap.data();
 
+        // 重複行動防護（重連 / 雙擊）：同個角色已行動過就直接抓回原本的訊息
+        const existing = data.nightActions?.[myUid]?.[currentRoleId];
+        if (existing) {
+          viewedInfo = existing.viewedInfo;
+          return;
+        }
+
         // 用 server 上最新的 currentCards 計算交換，避免覆蓋掉前面玩家的寫入
         const newCards = data.currentCards.map((c) => ({ ...c, role: { ...c.role } }));
         const myIdx = newCards.findIndex((c) => c.ownerUid === myUid);
@@ -227,7 +245,17 @@ export default function NightActionScreen({
             : myOriginalRole.name;
         const logEntry = `${myName} (${displayRoleName}): ${viewedInfo}`;
 
-        const updates = { logs: [...(data.logs || []), logEntry] };
+        // 紀錄本玩家在這個角色的行動結果，重連時可以復原
+        const newActions = { ...(data.nightActions || {}) };
+        newActions[myUid] = {
+          ...(newActions[myUid] || {}),
+          [currentRoleId]: { viewedInfo, timestamp: Date.now() },
+        };
+
+        const updates = {
+          logs: [...(data.logs || []), logEntry],
+          nightActions: newActions,
+        };
         // 只有實際改變牌堆時才寫 currentCards，避免讀取型角色（預言家、孤狼、失眠者）
         // 把自己過時的快照覆蓋回去而踩掉前面玩家的交換結果
         if (modified) updates.currentCards = newCards;

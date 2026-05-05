@@ -3,6 +3,7 @@ import {
   onSnapshot,
   updateDoc,
   arrayRemove,
+  arrayUnion,
   deleteDoc,
   runTransaction,
 } from 'firebase/firestore';
@@ -69,16 +70,33 @@ export default function App() {
     const ref = roomDoc(roomId);
     const unsub = onSnapshot(
       ref,
-      (snap) => {
+      async (snap) => {
         if (!snap.exists()) {
           setGameState(null);
           setRoomId('');
           return;
         }
         const data = snap.data();
-        // 重整或斷線後若已不在玩家清單中（例如被 kick / beforeunload 已清掉），回首頁
         const stillIn = data.players?.some((p) => p.uid === user.uid);
         if (!stillIn) {
+          // Lobby 階段且還有名字可用就自動重新加入；其他階段直接踢回首頁
+          if (data.status === 'lobby' && playerName) {
+            try {
+              await updateDoc(ref, {
+                players: arrayUnion({
+                  uid: user.uid,
+                  name: playerName,
+                  isHost: false,
+                }),
+              });
+            } catch (e) {
+              console.error('Auto-rejoin failed:', e);
+              setGameState(null);
+              setRoomId('');
+              showToast('自動重新加入失敗');
+            }
+            return;
+          }
           setGameState(null);
           setRoomId('');
           showToast('你已不在這個房間中');
@@ -95,7 +113,22 @@ export default function App() {
       (err) => console.error('Snapshot error:', err),
     );
     return () => unsub();
-  }, [user, roomId]);
+  }, [user, roomId, playerName]);
+
+  // 重連復原：從 server 上的 nightActions 還原最後看到的訊息
+  useEffect(() => {
+    if (!user || !gameState?.nightActions) return;
+    if (gameState.status === 'lobby') return;
+    const myActions = gameState.nightActions[user.uid];
+    if (!myActions) return;
+    const latest = Object.values(myActions).reduce(
+      (acc, a) => (a.timestamp > (acc?.timestamp || 0) ? a : acc),
+      null,
+    );
+    if (latest?.viewedInfo) {
+      setLocalViewed((prev) => prev ?? latest.viewedInfo);
+    }
+  }, [user, gameState?.nightActions, gameState?.status]);
 
   // 3. 離線清理：關閉視窗時把自己從 lobby 玩家列表移掉（遊戲已開始就保留位子）
   useEffect(() => {

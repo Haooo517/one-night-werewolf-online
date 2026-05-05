@@ -37,6 +37,10 @@ export default function Lobby({ gameState, user, isHost, roomId, showToast }) {
       activeRolePriority: 0,
       logs: [],
       doppelgangerRole: null,
+      nightActions: {},
+      votes: {},
+      gameResult: null,
+      pkCandidates: [],
       phaseEndTime:
         startTime +
         (gameState.settings?.nightDuration || 20) *
