@@ -37,9 +37,14 @@ export default function NightActionScreen({
   const teammates = werewolves
     .filter((w) => w.ownerUid !== user.uid)
     .map((w) => w.ownerName);
-  const masons = gameState.originalCards.filter(
-    (c) => c.role.id === 'mason' && c.ownerUid,
-  );
+  // 守夜人（含化身-守夜人）— 雙向可見
+  const masons = gameState.currentCards.filter((c) => {
+    const original = gameState.originalCards.find((oc) => oc.id === c.id);
+    const isOriginalMason = original?.role.id === 'mason';
+    const isDoppelMason =
+      original?.role.id === 'doppelganger' && gameState.doppelgangerRole === 'mason';
+    return (isOriginalMason || isDoppelMason) && c.ownerUid;
+  });
   const otherMason = masons
     .filter((m) => m.ownerUid !== user.uid)
     .map((m) => m.ownerName);
@@ -100,13 +105,30 @@ export default function NightActionScreen({
     const ref = roomDoc(roomId);
     const targetIdx = selection[0];
     const targetCard = gameState.currentCards[targetIdx];
+    const copiedRoleId = targetCard.role.id;
+    const copiedRole = findRole(copiedRoleId);
     const myName = gameState.players.find((p) => p.uid === user.uid)?.name;
     const viewLog = `${myName} (化身幽靈) 查看了 ${targetCard.ownerName}，化身為：【${targetCard.role.name}】`;
 
-    await updateDoc(ref, {
-      doppelgangerRole: targetCard.role.id,
+    const updates = {
+      doppelgangerRole: copiedRoleId,
       logs: arrayUnion(viewLog),
-    });
+    };
+
+    // 若複製到的角色有夜晚行動（priority < 90）但原本不在 nightOrder 中，
+    // 動態插入到正確位置，否則該角色永遠不會醒
+    if (
+      copiedRole &&
+      copiedRole.priority < 90 &&
+      !gameState.nightOrder.includes(copiedRoleId)
+    ) {
+      const newOrder = [...gameState.nightOrder, copiedRoleId].sort(
+        (a, b) => findRole(a).priority - findRole(b).priority,
+      );
+      updates.nightOrder = newOrder;
+    }
+
+    await updateDoc(ref, updates);
     setSelection([]);
     setLocalViewed(`你現在是：【${targetCard.role.name}】`);
   };
@@ -189,11 +211,11 @@ export default function NightActionScreen({
   // === A. 化身幽靈：尚未選擇要化身的對象 ===
   if (myOriginalRole?.id === 'doppelganger' && !gameState.doppelgangerRole) {
     return (
-      <div className="w-full bg-indigo-900/20 border border-indigo-500/50 p-8 rounded-[3rem] animate-in zoom-in-95">
-        <h3 className="text-2xl font-black text-indigo-400 mb-6 text-center">
+      <div className="w-full bg-indigo-900/20 border border-indigo-500/50 p-5 sm:p-8 rounded-2xl sm:rounded-[3rem] animate-in zoom-in-95">
+        <h3 className="text-xl sm:text-2xl font-black text-indigo-400 mb-5 sm:mb-6 text-center">
           化身幽靈：請選擇一名玩家
         </h3>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-6 sm:mb-8">
           {gameState.currentCards.map((c, idx) => {
             const isMe = c.ownerUid === user.uid;
             const isPlayer = !!c.ownerUid;
@@ -202,10 +224,10 @@ export default function NightActionScreen({
               <button
                 key={idx}
                 onClick={() => setSelection([idx])}
-                className={`p-4 rounded-2xl border-2 transition-all ${
+                className={`p-3 sm:p-4 rounded-2xl border-2 transition-all ${
                   selection.includes(idx)
                     ? 'border-indigo-400 bg-indigo-400/20 scale-105'
-                    : 'border-slate-700 bg-slate-800'
+                    : 'border-slate-700 bg-slate-800 hover:border-indigo-400/50'
                 }`}
               >
                 <div className="font-bold text-sm">{c.ownerName}</div>
@@ -216,7 +238,7 @@ export default function NightActionScreen({
         <button
           disabled={selection.length !== 1}
           onClick={submitDoppelgangerView}
-          className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 rounded-2xl font-black"
+          className="w-full py-3.5 sm:py-4 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 rounded-2xl font-black text-base sm:text-lg"
         >
           查看並化身
         </button>
@@ -227,11 +249,11 @@ export default function NightActionScreen({
   // === B. 多狼人：自動顯示同伴 ===
   if (role?.id === 'werewolf' && !isLoneWolf) {
     return (
-      <div className="w-full bg-red-900/20 border border-red-500/50 p-10 rounded-[3rem] text-center animate-in zoom-in-95">
-        <Users size={56} className="text-red-500 mx-auto mb-4" />
-        <h3 className="text-3xl font-black text-red-400 mb-6 tracking-tighter">狼人同伴</h3>
-        <div className="bg-slate-900/50 p-6 rounded-3xl border border-red-500/20 mb-6">
-          <div className="text-white text-2xl font-black">
+      <div className="w-full bg-red-900/20 border border-red-500/50 p-6 sm:p-10 rounded-2xl sm:rounded-[3rem] text-center animate-in zoom-in-95">
+        <Users size={48} className="text-red-500 mx-auto mb-3 sm:mb-4 sm:size-14" />
+        <h3 className="text-2xl sm:text-3xl font-black text-red-400 mb-4 sm:mb-6 tracking-tighter">狼人同伴</h3>
+        <div className="bg-slate-900/50 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-red-500/20 mb-4 sm:mb-6">
+          <div className="text-white text-xl sm:text-2xl font-black">
             {teammates.length > 0 ? teammates.join(' 、 ') : '沒有其他狼人'}
           </div>
         </div>
@@ -243,12 +265,12 @@ export default function NightActionScreen({
   // === C. 爪牙 ===
   if (role?.id === 'minion') {
     return (
-      <div className="w-full bg-orange-900/20 border border-orange-500/50 p-10 rounded-[3rem] text-center animate-in zoom-in-95">
-        <User size={56} className="text-orange-400 mx-auto mb-4" />
-        <h3 className="text-3xl font-black text-orange-400 mb-6 tracking-tighter">爪牙確認</h3>
-        <div className="bg-slate-900/50 p-6 rounded-3xl border border-orange-500/20 mb-6">
+      <div className="w-full bg-orange-900/20 border border-orange-500/50 p-6 sm:p-10 rounded-2xl sm:rounded-[3rem] text-center animate-in zoom-in-95">
+        <User size={48} className="text-orange-400 mx-auto mb-3 sm:mb-4 sm:size-14" />
+        <h3 className="text-2xl sm:text-3xl font-black text-orange-400 mb-4 sm:mb-6 tracking-tighter">爪牙確認</h3>
+        <div className="bg-slate-900/50 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-orange-500/20 mb-4 sm:mb-6">
           <p className="text-slate-500 text-sm mb-2">你得知了狼人的身分...</p>
-          <div className="text-white text-2xl font-black">
+          <div className="text-white text-xl sm:text-2xl font-black">
             {wolfNames.length > 0 ? wolfNames.join(' 、 ') : '場上沒有狼人，你是唯一的大哥！'}
           </div>
         </div>
@@ -260,11 +282,11 @@ export default function NightActionScreen({
   // === D. 守夜人 ===
   if (role?.id === 'mason') {
     return (
-      <div className="w-full bg-blue-900/20 border border-blue-500/50 p-10 rounded-[3rem] text-center animate-in zoom-in-95">
-        <Users size={56} className="text-blue-400 mx-auto mb-4" />
-        <h3 className="text-3xl font-black text-blue-400 mb-6 tracking-tighter">守夜人同伴</h3>
-        <div className="bg-slate-900/50 p-6 rounded-3xl border border-blue-500/20 mb-6">
-          <div className="text-white text-2xl font-black">
+      <div className="w-full bg-blue-900/20 border border-blue-500/50 p-6 sm:p-10 rounded-2xl sm:rounded-[3rem] text-center animate-in zoom-in-95">
+        <Users size={48} className="text-blue-400 mx-auto mb-3 sm:mb-4 sm:size-14" />
+        <h3 className="text-2xl sm:text-3xl font-black text-blue-400 mb-4 sm:mb-6 tracking-tighter">守夜人同伴</h3>
+        <div className="bg-slate-900/50 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-blue-500/20 mb-4 sm:mb-6">
+          <div className="text-white text-xl sm:text-2xl font-black">
             {otherMason.length > 0
               ? otherMason.join(' 、 ')
               : '場上沒有守夜人同伴，你要自己加油啊！'}
@@ -278,12 +300,12 @@ export default function NightActionScreen({
   // === E. 失眠者 ===
   if (role?.id === 'insomniac' && myFinalCard) {
     return (
-      <div className="w-full bg-purple-900/20 border border-purple-500/50 p-10 rounded-[3rem] text-center animate-in zoom-in-95">
-        <Eye size={56} className="text-purple-400 mx-auto mb-4" />
-        <h3 className="text-3xl font-black text-purple-400 mb-6 tracking-tighter">身分確認</h3>
-        <div className="bg-slate-900/50 p-6 rounded-3xl border border-purple-500/20 mb-6">
+      <div className="w-full bg-purple-900/20 border border-purple-500/50 p-6 sm:p-10 rounded-2xl sm:rounded-[3rem] text-center animate-in zoom-in-95">
+        <Eye size={48} className="text-purple-400 mx-auto mb-3 sm:mb-4 sm:size-14" />
+        <h3 className="text-2xl sm:text-3xl font-black text-purple-400 mb-4 sm:mb-6 tracking-tighter">身分確認</h3>
+        <div className="bg-slate-900/50 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-purple-500/20 mb-4 sm:mb-6">
           <p className="text-slate-500 text-sm mb-2">天亮前你偷偷看了一眼...</p>
-          <div className="text-white text-3xl font-black">【{myFinalCard.role.name}】</div>
+          <div className="text-white text-2xl sm:text-3xl font-black">【{myFinalCard.role.name}】</div>
         </div>
         <p className="text-slate-500 text-sm">無需操作，請等待夜晚結束...</p>
       </div>
@@ -292,8 +314,8 @@ export default function NightActionScreen({
 
   // === F. 互動式角色 (Seer / Robber / Troublemaker / Drunk / Lone Wolf) ===
   return (
-    <div className="w-full bg-blue-900/20 border border-blue-500/50 p-8 rounded-[3rem] shadow-2xl animate-in zoom-in-95 duration-500">
-      <h3 className="text-2xl font-black text-blue-400 mb-6 text-center underline underline-offset-8 decoration-4">
+    <div className="w-full bg-blue-900/20 border border-blue-500/50 p-5 sm:p-8 rounded-2xl sm:rounded-[3rem] shadow-2xl animate-in zoom-in-95 duration-500">
+      <h3 className="text-xl sm:text-2xl font-black text-blue-400 mb-5 sm:mb-6 text-center underline underline-offset-8 decoration-4">
         輪到你了：{role?.name}
       </h3>
       {myOriginalRole?.id === 'doppelganger' && gameState.doppelgangerRole && !hasActed && (
@@ -308,24 +330,24 @@ export default function NightActionScreen({
       )}
 
       {hasActed ? (
-        <div className="flex flex-col items-center py-10">
-          <CheckCircle2 size={48} className="text-green-500 mb-4 animate-bounce" />
-          <h3 className="text-2xl font-black text-green-400 mb-4">行動已完成</h3>
+        <div className="flex flex-col items-center py-6 sm:py-10">
+          <CheckCircle2 size={44} className="text-green-500 mb-3 sm:mb-4 animate-bounce" />
+          <h3 className="text-xl sm:text-2xl font-black text-green-400 mb-3 sm:mb-4">行動已完成</h3>
           {localViewed && (
-            <div className="mt-4 p-6 bg-slate-800 rounded-3xl border-2 border-yellow-500/50 shadow-[0_0_20px_rgba(234,179,8,0.2)]">
-              <p className="text-yellow-500 font-black mb-2 text-sm uppercase tracking-widest">
+            <div className="mt-3 sm:mt-4 p-4 sm:p-6 bg-slate-800 rounded-2xl sm:rounded-3xl border-2 border-yellow-500/50 shadow-[0_0_20px_rgba(234,179,8,0.2)] max-w-md">
+              <p className="text-yellow-500 font-black mb-1 sm:mb-2 text-xs sm:text-sm uppercase tracking-widest">
                 昨晚看到的資訊：
               </p>
-              <div className="text-white text-xl font-black">{localViewed}</div>
+              <div className="text-white text-base sm:text-xl font-black break-words">{localViewed}</div>
             </div>
           )}
-          <p className="text-slate-500 text-sm mt-8">
+          <p className="text-slate-500 text-xs sm:text-sm mt-6 sm:mt-8 text-center px-4">
             請閉上眼靜待倒數結束，不要讓別人看到你的螢幕...
           </p>
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-6 sm:mb-8">
             {gameState.currentCards.map((c, idx) => {
               const isMe = c.ownerUid === user.uid;
               const isSelected = selection.includes(idx);
@@ -368,7 +390,7 @@ export default function NightActionScreen({
                   key={idx}
                   disabled={!canClick}
                   onClick={handleClick}
-                  className={`p-4 rounded-2xl border-2 text-center transition-all ${
+                  className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl border-2 text-center transition-all ${
                     isSelected
                       ? 'border-yellow-400 bg-yellow-400/20 scale-105 shadow-[0_0_15px_rgba(250,204,21,0.3)]'
                       : 'border-slate-700 bg-slate-800'
@@ -376,7 +398,7 @@ export default function NightActionScreen({
                     !canClick ? 'opacity-30 grayscale cursor-not-allowed' : 'hover:border-blue-400 active:scale-95'
                   }`}
                 >
-                  <div className="text-[14px] text-slate-500 mb-1">
+                  <div className="text-[12px] sm:text-sm text-slate-500 mb-1">
                     {!isCenter ? '玩家' : '桌面'}
                   </div>
                   <div className="font-bold text-sm truncate">{c.ownerName}</div>
@@ -394,7 +416,7 @@ export default function NightActionScreen({
             <button
               disabled={!canSubmit}
               onClick={submitNightAction}
-              className="w-full sm:w-auto px-16 py-5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:opacity-50 text-white font-black text-xl rounded-3xl shadow-xl transition-all"
+              className="w-full sm:w-auto px-10 sm:px-16 py-4 sm:py-5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:opacity-50 text-white font-black text-lg sm:text-xl rounded-2xl sm:rounded-3xl shadow-xl transition-all active:scale-95"
             >
               確認行動
             </button>
