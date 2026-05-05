@@ -1,5 +1,5 @@
 import { updateDoc } from 'firebase/firestore';
-import { Sun, CheckCircle2 } from 'lucide-react';
+import { Sun, CheckCircle2, Flag } from 'lucide-react';
 
 import { roomDoc } from '../firebase.js';
 import { calculateWinner } from '../gameLogic.js';
@@ -69,6 +69,28 @@ export default function DiscussionPhase({ gameState, user, isHost, roomId }) {
           已投票 {validVotes.length} / {gameState.players.length}
         </p>
       </div>
+
+      {gameState.revealedCards && Object.keys(gameState.revealedCards).length > 0 && (
+        <div className="max-w-2xl mx-auto mb-8 p-5 bg-rose-900/20 border border-rose-500/40 rounded-2xl">
+          <div className="flex items-center gap-2 mb-3 justify-center">
+            <Flag size={18} className="text-rose-400" />
+            <h3 className="text-base sm:text-lg font-black text-rose-400 uppercase tracking-widest">
+              告密者公開資訊
+            </h3>
+          </div>
+          <div className="space-y-1.5">
+            {Object.entries(gameState.revealedCards).map(([uid, roleName]) => {
+              const player = gameState.players.find((p) => p.uid === uid);
+              return (
+                <div key={uid} className="flex items-center justify-between bg-slate-900/60 rounded-xl px-4 py-2">
+                  <span className="font-bold">{player?.name ?? uid.slice(0, 6)}</span>
+                  <span className="text-rose-300 font-black">【{roleName}】</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {gameState.settings?.allowSkip && (
         <div className="w-full flex justify-center mb-6 sm:mb-8">

@@ -1,7 +1,47 @@
 import { useMemo } from 'react';
 import { Moon } from 'lucide-react';
-import { findRole } from '../constants.js';
+import {
+  findRole,
+  getNightOrderLabel,
+  isWolfRoleId,
+} from '../constants.js';
 import NightActionScreen from './NightActionScreen.jsx';
+
+function isMyTurnAt({ myOriginalRole, currentActiveRoleId, doppelgangerRole }) {
+  if (!myOriginalRole || !currentActiveRoleId) return false;
+
+  // 狼人時段：所有狼陣營（含化身-狼陣營）一起睜眼相認
+  if (currentActiveRoleId === 'werewolf') {
+    if (isWolfRoleId(myOriginalRole.id)) return true;
+    if (myOriginalRole.id === 'doppelganger' && isWolfRoleId(doppelgangerRole)) return true;
+    return false;
+  }
+
+  // 化身選人時段：只有化身幽靈本人
+  if (currentActiveRoleId === 'doppelganger') {
+    return myOriginalRole.id === 'doppelganger';
+  }
+
+  // 化身-失眠者 / 化身-告密者 的虛擬 slot
+  if (currentActiveRoleId === 'doppel_insomniac') {
+    return myOriginalRole.id === 'doppelganger' && doppelgangerRole === 'insomniac';
+  }
+  if (currentActiveRoleId === 'doppel_revealer') {
+    return myOriginalRole.id === 'doppelganger' && doppelgangerRole === 'revealer';
+  }
+
+  // 化身為其他角色：在那個角色的時段醒來（失眠者 / 告密者除外，已用上面的虛擬 slot）
+  if (
+    myOriginalRole.id === 'doppelganger' &&
+    doppelgangerRole === currentActiveRoleId &&
+    !['insomniac', 'revealer'].includes(doppelgangerRole)
+  ) {
+    return true;
+  }
+
+  // 一般情況：原始角色 === 現在時段
+  return myOriginalRole.id === currentActiveRoleId;
+}
 
 export default function NightPhase(props) {
   const { gameState, user, timer } = props;
@@ -10,19 +50,21 @@ export default function NightPhase(props) {
   )?.role;
   const currentActiveRoleId = gameState.nightOrder[gameState.activeRolePriority];
 
-  const isMyTurn = useMemo(() => {
-    if (gameState.status !== 'night' || !myOriginalRole) return false;
-    if (myOriginalRole.id === 'doppelganger') {
-      if (currentActiveRoleId === 'doppelganger') return true;
-      if (gameState.doppelgangerRole === currentActiveRoleId) return true;
-    }
-    return myOriginalRole.id === currentActiveRoleId;
-  }, [
-    gameState.status,
-    myOriginalRole,
-    currentActiveRoleId,
-    gameState.doppelgangerRole,
-  ]);
+  const isMyTurn = useMemo(
+    () =>
+      gameState.status === 'night' &&
+      isMyTurnAt({
+        myOriginalRole,
+        currentActiveRoleId,
+        doppelgangerRole: gameState.doppelgangerRole,
+      }),
+    [
+      gameState.status,
+      myOriginalRole,
+      currentActiveRoleId,
+      gameState.doppelgangerRole,
+    ],
+  );
 
   const totalDuration = gameState.settings?.nightDuration || 20;
   const initialDuration =
@@ -39,10 +81,9 @@ export default function NightPhase(props) {
       </div>
 
       <h2 className="text-2xl sm:text-3xl lg:text-4xl font-black text-white mb-3 text-center px-2">
-        現在是 【{findRole(currentActiveRoleId)?.name}】 時間
+        現在是 【{getNightOrderLabel(currentActiveRoleId)}】 時間
       </h2>
 
-      {/* Timer with progress ring-ish bar */}
       <div className="w-full max-w-xs mb-6 sm:mb-8">
         <div className="text-center text-5xl sm:text-6xl font-black text-red-500 mb-2 animate-pulse tabular-nums">
           {timer || initialDuration}s
@@ -68,7 +109,11 @@ export default function NightPhase(props) {
       </div>
 
       {isMyTurn ? (
-        <NightActionScreen {...props} myOriginalRole={myOriginalRole} />
+        <NightActionScreen
+          {...props}
+          myOriginalRole={myOriginalRole}
+          currentActiveRoleId={currentActiveRoleId}
+        />
       ) : (
         <div className="p-8 sm:p-10 border-2 border-slate-800 rounded-2xl sm:rounded-3xl bg-slate-900/50 text-slate-500 text-center max-w-md">
           請閉上眼，靜待指令...

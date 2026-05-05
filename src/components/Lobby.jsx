@@ -244,16 +244,44 @@ export default function Lobby({ gameState, user, isHost, roomId, showToast }) {
                   {gameState.selectedRoles.length} / {requiredCardCount}
                 </div>
               </div>
-              <div className="grid grid-cols-1 gap-2 mb-6 max-h-[420px] overflow-y-auto overflow-x-hidden custom-scrollbar pr-1">
-                {ALL_ROLES.map((role) => (
-                  <RoleCounter
-                    key={role.id}
-                    role={role}
-                    gameState={gameState}
-                    isHost={isHost}
-                    roomId={roomId}
-                  />
-                ))}
+              <div className="space-y-4 mb-6 max-h-[460px] overflow-y-auto overflow-x-hidden custom-scrollbar pr-1">
+                <div>
+                  <h4 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] mb-2 px-1">
+                    基本角色
+                  </h4>
+                  <div className="grid grid-cols-1 gap-2">
+                    {ALL_ROLES.filter((r) => r.expansion === 'basic').map((role) => (
+                      <RoleCounter
+                        key={role.id}
+                        role={role}
+                        gameState={gameState}
+                        isHost={isHost}
+                        roomId={roomId}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <h4 className="text-xs font-black text-amber-500/80 uppercase tracking-[0.2em] mb-2 px-1">
+                    破曉擴充 (Daybreak)
+                  </h4>
+                  <div className="grid grid-cols-1 gap-2">
+                    {ALL_ROLES.filter((r) => r.expansion === 'daybreak').map((role) => (
+                      <RoleCounter
+                        key={role.id}
+                        role={role}
+                        gameState={gameState}
+                        isHost={isHost}
+                        roomId={roomId}
+                      />
+                    ))}
+                  </div>
+                </div>
+                {gameState.selectedRoles.includes('alphaWolf') && (
+                  <div className="text-[12px] text-amber-400/80 bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 leading-snug">
+                    ⚠️ 已選用「狼老大」 — 開局時會自動再放一張中央狼人牌（不計入下方 {requiredCardCount} 張的數量），用於狼老大行動。
+                  </div>
+                )}
               </div>
             </>
           ) : (
