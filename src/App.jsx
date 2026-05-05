@@ -4,10 +4,11 @@ import {
   updateDoc,
   arrayRemove,
   deleteDoc,
+  runTransaction,
 } from 'firebase/firestore';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 
-import { auth, roomDoc } from './firebase.js';
+import { auth, db, roomDoc } from './firebase.js';
 import Toast from './components/Toast.jsx';
 import Header from './components/Header.jsx';
 import Footer from './components/Footer.jsx';
@@ -156,29 +157,39 @@ export default function App() {
   const leaveRoom = async () => {
     if (!user || !roomId) return;
     const ref = roomDoc(roomId);
-    if (isHost && gameState?.status === 'lobby') {
-      // 大廳階段：房主退出 = 解散房間
-      await deleteDoc(ref);
-    } else if (isHost) {
-      // 遊戲中房主退出 = 把房主轉給下一位玩家
-      const others = gameState.players.filter((p) => p.uid !== user.uid);
-      if (others.length === 0) {
+    try {
+      if (isHost && gameState?.status === 'lobby') {
+        // 大廳階段：房主退出 = 解散房間
         await deleteDoc(ref);
-      } else {
-        await updateDoc(ref, {
-          hostId: others[0].uid,
-          players: others.map((p, i) =>
-            i === 0 ? { ...p, isHost: true } : { ...p, isHost: false },
-          ),
+      } else if (isHost) {
+        // 遊戲中房主退出 = 把房主轉給下一位玩家（用 transaction 避免覆蓋並行寫入）
+        await runTransaction(db, async (txn) => {
+          const snap = await txn.get(ref);
+          if (!snap.exists()) return;
+          const data = snap.data();
+          const others = data.players.filter((p) => p.uid !== user.uid);
+          if (others.length === 0) {
+            txn.delete(ref);
+          } else {
+            txn.update(ref, {
+              hostId: others[0].uid,
+              players: others.map((p, i) =>
+                i === 0 ? { ...p, isHost: true } : { ...p, isHost: false },
+              ),
+            });
+          }
         });
+        setGameState(null);
+        setRoomId('');
+      } else if (gameState?.players) {
+        const me = gameState.players.find((p) => p.uid === user.uid);
+        if (me) await updateDoc(ref, { players: arrayRemove(me) });
+        setGameState(null);
+        setRoomId('');
       }
-      setGameState(null);
-      setRoomId('');
-    } else if (gameState?.players) {
-      const me = gameState.players.find((p) => p.uid === user.uid);
-      if (me) await updateDoc(ref, { players: arrayRemove(me) });
-      setGameState(null);
-      setRoomId('');
+    } catch (e) {
+      console.error('Leave failed:', e);
+      showToast('離開房間失敗，請再試一次');
     }
   };
 

@@ -1,9 +1,9 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Users, User, Eye, CheckCircle2 } from 'lucide-react';
-import { updateDoc, arrayUnion } from 'firebase/firestore';
+import { runTransaction } from 'firebase/firestore';
 
 import { ALL_ROLES, findRole } from '../constants.js';
-import { roomDoc } from '../firebase.js';
+import { db, roomDoc } from '../firebase.js';
 
 export default function NightActionScreen({
   gameState,
@@ -18,6 +18,8 @@ export default function NightActionScreen({
   showToast,
   myOriginalRole,
 }) {
+  const [submitting, setSubmitting] = useState(false);
+
   // 化身完成後就以複製到的角色為準
   const role =
     myOriginalRole?.id === 'doppelganger' && gameState.doppelgangerRole
@@ -76,7 +78,7 @@ export default function NightActionScreen({
   }, [role?.id]);
 
   const canSubmit = useMemo(() => {
-    if (!role || hasActed) return false;
+    if (!role || hasActed || submitting) return false;
     const numPlayers = gameState.players.length;
     const allCenter = selection.every((idx) => idx >= numPlayers);
     const allPlayer = selection.every((idx) => idx < numPlayers);
@@ -99,113 +101,146 @@ export default function NightActionScreen({
       return selection.length === 1 && allCenter;
     }
     return selection.length === 0;
-  }, [role, selection, hasActed, gameState.players.length, isLoneWolf]);
+  }, [role, selection, hasActed, submitting, gameState.players.length, isLoneWolf]);
 
   const submitDoppelgangerView = async () => {
+    if (submitting) return;
+    setSubmitting(true);
     const ref = roomDoc(roomId);
+    const myUid = user.uid;
     const targetIdx = selection[0];
-    const targetCard = gameState.currentCards[targetIdx];
-    const copiedRoleId = targetCard.role.id;
-    const copiedRole = findRole(copiedRoleId);
-    const myName = gameState.players.find((p) => p.uid === user.uid)?.name;
-    const viewLog = `${myName} (化身幽靈) 查看了 ${targetCard.ownerName}，化身為：【${targetCard.role.name}】`;
+    let displayName = '';
+    try {
+      await runTransaction(db, async (txn) => {
+        const snap = await txn.get(ref);
+        if (!snap.exists()) throw new Error('房間不存在');
+        const data = snap.data();
+        if (data.doppelgangerRole) return; // 已寫入過：避免重複動作
 
-    const updates = {
-      doppelgangerRole: copiedRoleId,
-      logs: arrayUnion(viewLog),
-    };
+        const targetCard = data.currentCards[targetIdx];
+        if (!targetCard) throw new Error('目標牌不存在');
+        const copiedRoleId = targetCard.role.id;
+        const copiedRole = findRole(copiedRoleId);
+        displayName = targetCard.role.name;
 
-    // 若複製到的角色有夜晚行動（priority < 90）但原本不在 nightOrder 中，
-    // 動態插入到正確位置，否則該角色永遠不會醒
-    if (
-      copiedRole &&
-      copiedRole.priority < 90 &&
-      !gameState.nightOrder.includes(copiedRoleId)
-    ) {
-      const newOrder = [...gameState.nightOrder, copiedRoleId].sort(
-        (a, b) => findRole(a).priority - findRole(b).priority,
-      );
-      updates.nightOrder = newOrder;
+        const myName = data.players.find((p) => p.uid === myUid)?.name;
+        const viewLog = `${myName} (化身幽靈) 查看了 ${targetCard.ownerName}，化身為：【${targetCard.role.name}】`;
+
+        const updates = {
+          doppelgangerRole: copiedRoleId,
+          logs: [...(data.logs || []), viewLog],
+        };
+
+        // 若複製到的角色有夜晚行動但原本不在 nightOrder 中，動態插入
+        if (
+          copiedRole &&
+          copiedRole.priority < 90 &&
+          !data.nightOrder.includes(copiedRoleId)
+        ) {
+          updates.nightOrder = [...data.nightOrder, copiedRoleId].sort(
+            (a, b) => findRole(a).priority - findRole(b).priority,
+          );
+        }
+
+        txn.update(ref, updates);
+      });
+      setSelection([]);
+      if (displayName) setLocalViewed(`你現在是：【${displayName}】`);
+    } catch (e) {
+      console.error('Doppelganger pick failed:', e);
+      showToast?.('行動失敗，請再試一次');
+    } finally {
+      setSubmitting(false);
     }
-
-    await updateDoc(ref, updates);
-    setSelection([]);
-    setLocalViewed(`你現在是：【${targetCard.role.name}】`);
   };
 
   const submitNightAction = async () => {
+    if (submitting || hasActed) return;
+    setSubmitting(true);
     const ref = roomDoc(roomId);
-    const newCards = [...gameState.currentCards];
     const myUid = user.uid;
     const currentRoleId = role.id;
+    const selectionLocal = [...selection];
     let viewedInfo = '';
+    try {
+      await runTransaction(db, async (txn) => {
+        const snap = await txn.get(ref);
+        if (!snap.exists()) throw new Error('房間不存在');
+        const data = snap.data();
 
-    if (currentRoleId === 'seer') {
-      if (selection.length > 0) {
-        const viewed = selection.map((idx) => newCards[idx]);
-        viewedInfo = viewed.map((v) => `${v.ownerName}: 【${v.role.name}】`).join('、 ');
-      } else {
-        viewedInfo = '你沒有查看任何牌。';
-      }
-    } else if (currentRoleId === 'robber') {
-      if (selection.length > 0) {
-        const targetIdx = selection[0];
-        const targetName = newCards[targetIdx].ownerName;
-        const targetRoleName = newCards[targetIdx].role.name;
+        // 用 server 上最新的 currentCards 計算交換，避免覆蓋掉前面玩家的寫入
+        const newCards = data.currentCards.map((c) => ({ ...c, role: { ...c.role } }));
         const myIdx = newCards.findIndex((c) => c.ownerUid === myUid);
-        const tempRole = newCards[myIdx].role;
-        newCards[myIdx].role = newCards[targetIdx].role;
-        newCards[targetIdx].role = tempRole;
-        viewedInfo = `你偷取了 ${targetName} 的身分，你現在是 【${targetRoleName}】。`;
-      } else {
-        viewedInfo = '你選擇不換牌。';
-      }
-    } else if (currentRoleId === 'troublemaker') {
-      if (selection.length === 2) {
-        const [idx1, idx2] = selection;
-        const name1 = newCards[idx1].ownerName;
-        const name2 = newCards[idx2].ownerName;
-        const temp = newCards[idx1].role;
-        newCards[idx1].role = newCards[idx2].role;
-        newCards[idx2].role = temp;
-        viewedInfo = `你交換了 ${name1} 與 ${name2} 的角色。`;
-      } else {
-        viewedInfo = '你選擇不換牌。';
-      }
-    } else if (currentRoleId === 'drunk') {
-      const targetIdx = selection[0];
-      const targetName = newCards[targetIdx].ownerName;
-      const myIdx = newCards.findIndex((c) => c.ownerUid === myUid);
-      const temp = newCards[myIdx].role;
-      newCards[myIdx].role = newCards[targetIdx].role;
-      newCards[targetIdx].role = temp;
-      viewedInfo = `你已將自己的牌與 【${targetName}】 交換（不可查看）。`;
-    } else if (currentRoleId === 'insomniac') {
-      const myCard = newCards.find((c) => c.ownerUid === myUid);
-      viewedInfo = `你查看了自己的牌，你最終的身分是：【${myCard.role.name}】`;
-    } else if (currentRoleId === 'werewolf') {
-      if (selection.length > 0) {
-        const viewed = selection.map((idx) => newCards[idx]);
-        viewedInfo = viewed.map((v) => `${v.ownerName}: 【${v.role.name}】`).join('、 ');
-      } else {
-        viewedInfo = '已確認身分。';
-      }
-    } else {
-      viewedInfo = '已完成行動。';
-    }
-    setLocalViewed(viewedInfo);
+        let modified = false;
 
-    const myName = gameState.players.find((p) => p.uid === user.uid)?.name;
-    const displayRoleName =
-      myOriginalRole.id === 'doppelganger' && gameState.doppelgangerRole
-        ? `化身-${ALL_ROLES.find((r) => r.id === gameState.doppelgangerRole).name}`
-        : myOriginalRole.name;
-    const logEntry = `${myName} (${displayRoleName}): ${viewedInfo}`;
-    await updateDoc(ref, {
-      currentCards: newCards,
-      logs: arrayUnion(logEntry),
-    });
-    setHasActed(true);
+        if (currentRoleId === 'seer') {
+          if (selectionLocal.length > 0) {
+            const viewed = selectionLocal.map((idx) => newCards[idx]);
+            viewedInfo = viewed.map((v) => `${v.ownerName}: 【${v.role.name}】`).join('、 ');
+          } else viewedInfo = '你沒有查看任何牌。';
+        } else if (currentRoleId === 'robber') {
+          if (selectionLocal.length > 0) {
+            const targetIdx = selectionLocal[0];
+            const targetName = newCards[targetIdx].ownerName;
+            const targetRoleName = newCards[targetIdx].role.name;
+            const tmp = newCards[myIdx].role;
+            newCards[myIdx].role = newCards[targetIdx].role;
+            newCards[targetIdx].role = tmp;
+            viewedInfo = `你偷取了 ${targetName} 的身分，你現在是 【${targetRoleName}】。`;
+            modified = true;
+          } else viewedInfo = '你選擇不換牌。';
+        } else if (currentRoleId === 'troublemaker') {
+          if (selectionLocal.length === 2) {
+            const [idx1, idx2] = selectionLocal;
+            const name1 = newCards[idx1].ownerName;
+            const name2 = newCards[idx2].ownerName;
+            const tmp = newCards[idx1].role;
+            newCards[idx1].role = newCards[idx2].role;
+            newCards[idx2].role = tmp;
+            viewedInfo = `你交換了 ${name1} 與 ${name2} 的角色。`;
+            modified = true;
+          } else viewedInfo = '你選擇不換牌。';
+        } else if (currentRoleId === 'drunk') {
+          const targetIdx = selectionLocal[0];
+          const targetName = newCards[targetIdx].ownerName;
+          const tmp = newCards[myIdx].role;
+          newCards[myIdx].role = newCards[targetIdx].role;
+          newCards[targetIdx].role = tmp;
+          viewedInfo = `你已將自己的牌與 【${targetName}】 交換（不可查看）。`;
+          modified = true;
+        } else if (currentRoleId === 'insomniac') {
+          const myCard = newCards[myIdx];
+          viewedInfo = `你查看了自己的牌，你最終的身分是：【${myCard.role.name}】`;
+        } else if (currentRoleId === 'werewolf') {
+          if (selectionLocal.length > 0) {
+            const viewed = selectionLocal.map((idx) => newCards[idx]);
+            viewedInfo = viewed.map((v) => `${v.ownerName}: 【${v.role.name}】`).join('、 ');
+          } else viewedInfo = '已確認身分。';
+        } else {
+          viewedInfo = '已完成行動。';
+        }
+
+        const myName = data.players.find((p) => p.uid === myUid)?.name;
+        const displayRoleName =
+          myOriginalRole.id === 'doppelganger' && data.doppelgangerRole
+            ? `化身-${ALL_ROLES.find((r) => r.id === data.doppelgangerRole).name}`
+            : myOriginalRole.name;
+        const logEntry = `${myName} (${displayRoleName}): ${viewedInfo}`;
+
+        const updates = { logs: [...(data.logs || []), logEntry] };
+        // 只有實際改變牌堆時才寫 currentCards，避免讀取型角色（預言家、孤狼、失眠者）
+        // 把自己過時的快照覆蓋回去而踩掉前面玩家的交換結果
+        if (modified) updates.currentCards = newCards;
+        txn.update(ref, updates);
+      });
+      setLocalViewed(viewedInfo);
+      setHasActed(true);
+    } catch (e) {
+      console.error('Submit failed:', e);
+      showToast?.('行動失敗，請再試一次');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   // === A. 化身幽靈：尚未選擇要化身的對象 ===
@@ -236,11 +271,11 @@ export default function NightActionScreen({
           })}
         </div>
         <button
-          disabled={selection.length !== 1}
+          disabled={selection.length !== 1 || submitting}
           onClick={submitDoppelgangerView}
-          className="w-full py-3.5 sm:py-4 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 rounded-2xl font-black text-base sm:text-lg"
+          className="w-full py-3.5 sm:py-4 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed rounded-2xl font-black text-base sm:text-lg"
         >
-          查看並化身
+          {submitting ? '處理中...' : '查看並化身'}
         </button>
       </div>
     );
@@ -418,7 +453,7 @@ export default function NightActionScreen({
               onClick={submitNightAction}
               className="w-full sm:w-auto px-10 sm:px-16 py-4 sm:py-5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:opacity-50 text-white font-black text-lg sm:text-xl rounded-2xl sm:rounded-3xl shadow-xl transition-all active:scale-95"
             >
-              確認行動
+              {submitting ? '處理中...' : '確認行動'}
             </button>
             {(role?.id === 'robber' || role?.id === 'troublemaker') && selection.length === 0 && (
               <p className="text-sm text-slate-500">（可選擇不換牌直接點確認）</p>

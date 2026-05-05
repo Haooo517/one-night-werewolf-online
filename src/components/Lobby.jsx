@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { Users, UserCircle, ArrowRight, Pencil, Check, X } from 'lucide-react';
-import { updateDoc } from 'firebase/firestore';
+import { updateDoc, runTransaction } from 'firebase/firestore';
 
 import { ALL_ROLES } from '../constants.js';
-import { roomDoc } from '../firebase.js';
+import { db, roomDoc } from '../firebase.js';
 import { buildInitialDeck } from '../gameLogic.js';
 import RoleCounter from './RoleCounter.jsx';
 
@@ -64,17 +64,40 @@ export default function Lobby({ gameState, user, isHost, roomId, showToast }) {
     const trimmed = draftName.trim();
     if (!trimmed) return showToast('名字不能空白');
     if (trimmed.length > 20) return showToast('名字最多 20 個字');
-    const next = gameState.players.map((p) =>
-      p.uid === user.uid ? { ...p, name: trimmed } : p,
-    );
-    await updateDoc(roomDoc(roomId), { players: next });
-    setEditingName(false);
+    try {
+      // Transaction：避免「我改名 + 別人加入」同時發生時把對方寫入蓋掉
+      await runTransaction(db, async (txn) => {
+        const ref = roomDoc(roomId);
+        const snap = await txn.get(ref);
+        if (!snap.exists()) throw new Error('房間不存在');
+        const data = snap.data();
+        const next = data.players.map((p) =>
+          p.uid === user.uid ? { ...p, name: trimmed } : p,
+        );
+        txn.update(ref, { players: next });
+      });
+      setEditingName(false);
+    } catch (e) {
+      console.error('Save name failed:', e);
+      showToast('改名失敗，請再試一次');
+    }
   };
 
   const kickPlayer = async (targetUid) => {
     if (!isHost || targetUid === user.uid) return;
-    const next = gameState.players.filter((p) => p.uid !== targetUid);
-    await updateDoc(roomDoc(roomId), { players: next });
+    try {
+      await runTransaction(db, async (txn) => {
+        const ref = roomDoc(roomId);
+        const snap = await txn.get(ref);
+        if (!snap.exists()) throw new Error('房間不存在');
+        const data = snap.data();
+        const next = data.players.filter((p) => p.uid !== targetUid);
+        txn.update(ref, { players: next });
+      });
+    } catch (e) {
+      console.error('Kick failed:', e);
+      showToast('踢出失敗，請再試一次');
+    }
   };
 
   const startDisabledReason = !enoughPlayers
